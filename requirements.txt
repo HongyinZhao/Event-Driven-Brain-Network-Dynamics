@@ -1,0 +1,6 @@
+infomap
+numpy
+pandas
+scipy
+statsmodels
+tqdm
