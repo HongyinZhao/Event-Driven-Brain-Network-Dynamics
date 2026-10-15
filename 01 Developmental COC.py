@@ -337,7 +337,7 @@ def run_pipeline(subject_pma_list, bold_dir, base_output_dir):
 
     for config in configs:
         print(
-            f"\n>>> 运行参数组 [{config['name']}]: Sim={config['sim_th']}, "
+            f"\n>>>  [{config['name']}]: Sim={config['sim_th']}, "
             f"Expansion={config['expansion_th']}, Contraction={config['contraction_th']}"
         )
 
