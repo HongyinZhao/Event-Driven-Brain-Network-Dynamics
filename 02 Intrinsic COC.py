@@ -22,15 +22,15 @@ BOLD_DATA_DIR = r""
 OUTPUT_DIR = r""
 POPULATION_AVG_DIR = os.path.join(OUTPUT_DIR, "Population_Average_Matrices")
 
-NUM_NODES = None           # Number of cortical vertices
-TOTAL_SUBJECTS = None      # Fallback subject count when files are not discovered
-WINDOW_SIZE = None         # Volumes per non-overlapping window
-CORR_THRESHOLD = None      # Fisher-z threshold for Infomap
-SIMILARITY_THRESHOLD = None   # Jaccard similarity threshold
-EXPANSION_THRESHOLD = None   # Community-size ratio for expansion
-CONTRACTION_THRESHOLD = None # Community-size ratio for contraction
-MAX_WORKERS = None         # Parallel processes for individual analysis
-MAX_AVERAGE_WORKERS = None # Maximum processes for group averaging
+NUM_NODES = []           # Number of cortical vertices
+TOTAL_SUBJECTS = []     # Fallback subject count when files are not discovered
+WINDOW_SIZE = []         # Volumes per non-overlapping window
+CORR_THRESHOLD = []      # Fisher-z threshold for Infomap
+SIMILARITY_THRESHOLD = []   # Jaccard similarity threshold
+EXPANSION_THRESHOLD = []   # Community-size ratio for expansion
+CONTRACTION_THRESHOLD = [] # Community-size ratio for contraction
+MAX_WORKERS = []         # Parallel processes for individual analysis
+MAX_AVERAGE_WORKERS = [] # Maximum processes for group averaging
 
 EVENT_TYPES = ['emergence', 'disappearance', 'expansion', 'contraction']
 
