@@ -19,7 +19,7 @@ from tqdm import tqdm
 
 # %% Analysis parameters and file paths
 BOLD_DATA_DIR = r""     # Folder containing sub_BOLD_<subject_id>.mat
-OUTPUT_DIR = r""
+OUTPUT_DIR = r""        # Folder for individual COC output
 POPULATION_AVG_DIR = os.path.join(OUTPUT_DIR, "Population_Average_Matrices")
 
 NUM_NODES = []           # Number of cortical vertices
