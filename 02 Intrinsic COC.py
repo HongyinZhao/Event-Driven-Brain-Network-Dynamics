@@ -1,3 +1,8 @@
+# This code calculates intrinsic event-specific co-occurrence connectivity (COC).
+# Individual BOLD time series are divided into non-overlapping windows.
+# The analysis includes FC, Infomap communities, evolution events and subject/group COC.
+# Set the data paths and numerical analysis parameters below before running.
+
 import os
 import gc
 import glob
@@ -12,23 +17,26 @@ import scipy.io as sio
 from scipy.io import loadmat, savemat
 from tqdm import tqdm
 
-# Analysis Parameter
+# %% Analysis parameters and file paths
 BOLD_DATA_DIR = r""
 OUTPUT_DIR = r""
 POPULATION_AVG_DIR = os.path.join(OUTPUT_DIR, "Population_Average_Matrices")
 
-NUM_NODES = []              # vertex number
-TOTAL_SUBJECTS = []        # subject number
-WINDOW_SIZE = []           # window size
-CORR_THRESHOLD = []       # Fisher-Z correlation threshold
-SIMILARITY_THRESHOLD = []  # Jaccard similarity threshold
-MAX_WORKERS = []            # Number of concurrent progress
+NUM_NODES = None           # Number of cortical vertices
+TOTAL_SUBJECTS = None      # Fallback subject count when files are not discovered
+WINDOW_SIZE = None         # Volumes per non-overlapping window
+CORR_THRESHOLD = None      # Fisher-z threshold for Infomap
+SIMILARITY_THRESHOLD = None   # Jaccard similarity threshold
+EXPANSION_THRESHOLD = None   # Community-size ratio for expansion
+CONTRACTION_THRESHOLD = None # Community-size ratio for contraction
+MAX_WORKERS = None         # Parallel processes for individual analysis
+MAX_AVERAGE_WORKERS = None # Maximum processes for group averaging
 
 EVENT_TYPES = ['emergence', 'disappearance', 'expansion', 'contraction']
 
-# 1. FC calculation and Fisher-Z transformation
-def calculate_pearson_fc(window_data):
 
+# %% Calculation of window-wise Pearson FC and Fisher-z transformation
+def calculate_pearson_fc(window_data):
     X_mean = window_data.mean(axis=1, keepdims=True)
     X_centered = window_data - X_mean
     X_norm = np.linalg.norm(X_centered, axis=1, keepdims=True)
@@ -39,15 +47,13 @@ def calculate_pearson_fc(window_data):
 
 
 def fisher_z_transform(window_r):
-
     window_r = np.clip(window_r, -0.9999, 0.9999)
     fisher_z_matrix = np.arctanh(window_r)
     return fisher_z_matrix
 
 
-# 2. Community Detection
-def detect_communities_in_window(fisher_z_matrix, threshold=[]):
-
+# %% Detection of Infomap communities
+def detect_communities_in_window(fisher_z_matrix, threshold):
     n_nodes = fisher_z_matrix.shape[0]
     work_matrix = fisher_z_matrix.copy()
     np.fill_diagonal(work_matrix, 0)
@@ -55,6 +61,7 @@ def detect_communities_in_window(fisher_z_matrix, threshold=[]):
     rows, cols = np.triu_indices_from(work_matrix, k=1)
     weights = work_matrix[rows, cols]
 
+    # Retain positive FC values above the selected threshold.
     valid_mask = (weights > threshold) & (~np.isnan(weights))
     valid_rows = rows[valid_mask]
     valid_cols = cols[valid_mask]
@@ -76,9 +83,8 @@ def detect_communities_in_window(fisher_z_matrix, threshold=[]):
     return communities
 
 
-# 3. Community Evolution Events Detection
+# %% Identification of community evolution events
 def calculate_similarity(nodes_set1, nodes_set2):
-    """Calculating Jaccard Similarity"""
     if len(nodes_set1) == 0 and len(nodes_set2) == 0:
         return 1.0
     intersection = len(nodes_set1.intersection(nodes_set2))
@@ -93,8 +99,7 @@ def group_nodes_by_community(communities):
     return dict(groups)
 
 
-def detect_evolution_events(prev_communities, curr_communities, window_idx, threshold=0.4):
-
+def detect_evolution_events(prev_communities, curr_communities, window_idx, threshold):
     events = []
     if not prev_communities or not curr_communities:
         return events
@@ -102,7 +107,7 @@ def detect_evolution_events(prev_communities, curr_communities, window_idx, thre
     prev_groups = group_nodes_by_community(prev_communities)
     curr_groups = group_nodes_by_community(curr_communities)
 
-    # 1. Emergence
+    # A current community is emergent if it lacks a strong prior match.
     for curr_id, curr_nodes in curr_groups.items():
         curr_nodes_set = set(curr_nodes)
         best_similarity = 0
@@ -121,7 +126,7 @@ def detect_evolution_events(prev_communities, curr_communities, window_idx, thre
                 'Node_Count': len(curr_nodes)
             })
 
-    # 2. Disappearance
+    # A prior community disappears when no current match qualifies.
     for prev_id, prev_nodes in prev_groups.items():
         prev_nodes_set = set(prev_nodes)
         best_similarity = 0
@@ -148,8 +153,8 @@ def detect_evolution_events(prev_communities, curr_communities, window_idx, thre
             prev_size = len(prev_nodes)
             curr_size = len(best_match_nodes)
             ratio = curr_size / prev_size if prev_size > 0 else 1
-            # 3. expansion
-            if ratio > []:
+
+            if ratio > EXPANSION_THRESHOLD:
                 events.append({
                     'Window_Number': window_idx + 1,
                     'Event_Type': 'expansion',
@@ -160,8 +165,8 @@ def detect_evolution_events(prev_communities, curr_communities, window_idx, thre
                     'Expansion_Ratio': f"{ratio:.2%}",
                     'Similarity': best_similarity
                 })
-                # 4. contraction
-            elif ratio < []:
+
+            elif ratio < CONTRACTION_THRESHOLD:
                 events.append({
                     'Window_Number': window_idx + 1,
                     'Event_Type': 'contraction',
@@ -176,8 +181,8 @@ def detect_evolution_events(prev_communities, curr_communities, window_idx, thre
     return events
 
 
-# 4. Event-specific COC Calculation
-def build_and_save_cooccurrence_matrices(all_evolution_events, comm_dict, subject_out_dir, n_windows, num_nodes=8589):
+# %% Calculation of individual event-specific COC matrices
+def build_and_save_cooccurrence_matrices(all_evolution_events, comm_dict, subject_out_dir, n_windows, num_nodes):
 
     num_transitions = max(1, n_windows - 1)
 
@@ -211,6 +216,7 @@ def build_and_save_cooccurrence_matrices(all_evolution_events, comm_dict, subjec
                     nodes = nodes[(nodes >= 0) & (nodes < num_nodes)]
                     matrix[np.ix_(nodes, nodes)] += 1.0
 
+            # Count links between changing and persisting community members.
             elif event_type in ['expansion', 'contraction']:
                 if prev_id == -1 or curr_id == -1:
                     continue
@@ -224,7 +230,7 @@ def build_and_save_cooccurrence_matrices(all_evolution_events, comm_dict, subjec
                     if len(common_nodes) > 0:
                         if event_type == 'expansion':
                             target_nodes = np.setdiff1d(curr_nodes, prev_nodes)
-                        else:  # contraction
+                        else:
                             target_nodes = np.setdiff1d(prev_nodes, curr_nodes)
 
                         target_nodes = target_nodes[(target_nodes >= 0) & (target_nodes < num_nodes)]
@@ -244,40 +250,36 @@ def build_and_save_cooccurrence_matrices(all_evolution_events, comm_dict, subjec
         gc.collect()
 
 
-# 5. singele subiect analysis pipeline
-
+# %% Processing of individual BOLD time series
 def process_individual_subject(args):
-
     subject_id, bold_dir, output_dir, threshold, num_nodes = args
     file_path = os.path.join(bold_dir, f"sub_BOLD_{subject_id}.mat")
     subject_out_dir = os.path.join(output_dir, f"subject_{subject_id}")
     os.makedirs(subject_out_dir, exist_ok=True)
 
     if not os.path.exists(file_path):
-        return subject_id, False, f"can't find the file: {file_path}"
+        return subject_id, False, None
 
     try:
-        # 1. load BOLD data
         mat_data = sio.loadmat(file_path)
         var_names = [k for k in mat_data.keys() if not k.startswith('__')]
         if not var_names:
-            return subject_id, False, "no valid variable name"
+            return subject_id, False, None
 
         bold_signal = mat_data[var_names[0]]
-        n_nodes_actual, n_time = bold_signal.shape
+        _, n_time = bold_signal.shape
+        # Discard any trailing volumes that do not form a complete window.
         n_windows = n_time // WINDOW_SIZE
 
         if n_windows < 2:
-            return subject_id, False, "time window too small"
+            return subject_id, False, None
 
         subject_timeline_results = []
-
 
         for w in range(n_windows):
             start_idx = w * WINDOW_SIZE
             end_idx = start_idx + WINDOW_SIZE
             window_data = bold_signal[:, start_idx:end_idx]
-
 
             window_r = calculate_pearson_fc(window_data)
             fisher_z_matrix = fisher_z_transform(window_r)
@@ -289,10 +291,9 @@ def process_individual_subject(args):
 
         del bold_signal
 
-
         all_evolution_events = []
         community_details = []
-        comm_dict = {}  # (comm_id, win_num) -> np.array(nodes)
+        comm_dict = {}
 
         prev_communities = None
         for window_idx, communities in enumerate(subject_timeline_results):
@@ -320,7 +321,6 @@ def process_individual_subject(args):
 
             prev_communities = communities
 
-
         if all_evolution_events:
             events_df = pd.DataFrame(all_evolution_events)
             events_df.to_csv(os.path.join(subject_out_dir, f"evolution_events_{subject_id}.csv"),
@@ -331,7 +331,6 @@ def process_individual_subject(args):
             sub_df.to_csv(os.path.join(subject_out_dir, f"subcommunity_details_{subject_id}.csv"),
                           index=False, encoding='utf-8-sig')
 
-
         build_and_save_cooccurrence_matrices(
             all_evolution_events, comm_dict, subject_out_dir, n_windows=n_windows, num_nodes=num_nodes
         )
@@ -339,14 +338,11 @@ def process_individual_subject(args):
         return subject_id, True, "successful"
 
     except Exception as e:
-        import traceback
-        return subject_id, False, f"{str(e)}\n{traceback.format_exc()}"
+        return subject_id, False, None
 
 
-# 6. Average the individual COC matrix across the entire population
-
+# %% Calculation of group-averaged intrinsic COC
 def process_chunk_average(args):
-
     event_type, chunk_ids, base_dir, num_nodes = args
     chunk_sum_matrix = np.zeros((num_nodes, num_nodes), dtype=np.float64)
     valid_count = 0
@@ -368,10 +364,8 @@ def process_chunk_average(args):
 
 
 def compute_population_average_matrices(base_dir, output_avg_dir, subject_ids, num_nodes, max_workers):
-
     total_subjects = len(subject_ids)
-    merge_workers = min(max_workers, 10)
-
+    merge_workers = min(max_workers, MAX_AVERAGE_WORKERS)
 
     os.makedirs(output_avg_dir, exist_ok=True)
 
@@ -394,24 +388,21 @@ def compute_population_average_matrices(base_dir, output_avg_dir, subject_ids, n
                 total_valid_count += chunk_valid
                 del chunk_sum
 
+        # Average only the matrices successfully loaded for this event.
         if total_valid_count > 0:
             avg_matrix = total_sum_matrix / total_valid_count
             output_file = os.path.join(output_avg_dir, f"average_{event_type}_COC.mat")
             savemat(output_file, {'matrix': avg_matrix.astype(np.float32)}, do_compression=True)
 
-            print(f"successful")
+            print(f"{event_type}: average saved for {total_valid_count} subjects")
             del avg_matrix
-        else:
-            print(f"✖ failed")
 
         del total_sum_matrix
         gc.collect()
 
 
-
-
+# %% Loading of subjects and execution
 def get_subject_ids(bold_dir):
-
     mat_files = glob.glob(os.path.join(bold_dir, "sub_BOLD_*.mat"))
     subject_ids = []
     for f in mat_files:
@@ -424,31 +415,20 @@ def get_subject_ids(bold_dir):
 
 
 def main():
-    print("=" * 80)
-    print("pipeline begins")
-    print("=" * 80)
-
-    if not os.path.exists(BOLD_DATA_DIR):
-        print(f"✖ can't find the BOLD directory -> {BOLD_DATA_DIR}")
-        return
-
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-
 
     subject_ids = get_subject_ids(BOLD_DATA_DIR)
     total_subjects = len(subject_ids)
-    print(f"\n A total of  {total_subjects} subjects were found。")
-
+    print(f"Subjects found: {total_subjects}")
 
     task_args = [
         (subject_id, BOLD_DATA_DIR, OUTPUT_DIR, CORR_THRESHOLD, NUM_NODES)
         for subject_id in subject_ids
     ]
 
-
-    print(f"\n[stage 1] start {MAX_WORKERS} processes {total_subjects} subjects...")
+    print(f"Computing individual COC for {total_subjects} subjects...")
     success_count = 0
-    fail_list = []
+    skipped_count = 0
 
     with multiprocessing.Pool(processes=MAX_WORKERS) as pool:
         for subj_id, status, msg in tqdm(pool.imap_unordered(process_individual_subject, task_args),
@@ -456,12 +436,9 @@ def main():
             if status:
                 success_count += 1
             else:
-                fail_list.append((subj_id, msg))
+                skipped_count += 1
 
-    print(f"\nsuccessful: {success_count} / {total_subjects}，failed: {len(fail_list)}")
-    if fail_list:
-        print(f" {fail_list[:5]}")
-
+    print(f"Completed: {success_count}/{total_subjects}; skipped: {skipped_count}")
 
     compute_population_average_matrices(
         base_dir=OUTPUT_DIR,
@@ -471,7 +448,7 @@ def main():
         max_workers=MAX_WORKERS
     )
 
-    print("All done!")
+    print("Intrinsic COC analysis complete.")
 
 
 if __name__ == "__main__":
