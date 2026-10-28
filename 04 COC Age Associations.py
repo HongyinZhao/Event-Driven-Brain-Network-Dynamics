@@ -13,9 +13,9 @@ import threading
 from tqdm import tqdm
 
 # %% Analysis parameters and file paths
-BASE_DIR = r""
-PMA_PATH = r""
-NET_LABEL_PATH = r""
+BASE_DIR = r""        # Folder containing individual COC matrices
+PMA_PATH = r""        # MAT file containing GA and PMA values
+NET_LABEL_PATH = r""  # MAT file containing Yeo's 7-network labels
 
 EVENTS = ["emergence", "disappearance", "expansion", "contraction"]
 NUM_SUBJECTS = []      # Number of participants
