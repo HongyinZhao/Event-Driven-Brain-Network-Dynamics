@@ -21,14 +21,14 @@ PMA_MAT_FILE = r""        # MAT file containing the PMA values
 PMA_VARIABLE = ""         # PMA variable name in the MAT file
 OUTPUT_DIR = r""           # Folder for developmental COC output
 
-NUM_NODES = None           # Number of cortical vertices
-CORR_THRESHOLD = None      # Fisher-z threshold for Infomap
-SIMILARITY_THRESHOLD = None   # Jaccard similarity threshold
-EXPANSION_THRESHOLD = None   # Community-size ratio for expansion
-CONTRACTION_THRESHOLD = None # Community-size ratio for contraction
-NUM_ITERATIONS = None      # Monte Carlo sampling repetitions
+NUM_NODES = []           # Number of cortical vertices
+CORR_THRESHOLD = []      # Fisher-z threshold for Infomap
+SIMILARITY_THRESHOLD = []   # Jaccard similarity threshold
+EXPANSION_THRESHOLD = []   # Community-size ratio for expansion
+CONTRACTION_THRESHOLD = [] # Community-size ratio for contraction
+NUM_ITERATIONS = []      # Monte Carlo sampling repetitions
 CONFIG_NAME = ""          # Label for this parameter configuration
-MAX_WORKERS = None         # Parallel processes
+MAX_WORKERS = []        # Parallel processes
 
 EVENT_TYPES = ['emergence', 'disappearance', 'expansion', 'contraction']
 
