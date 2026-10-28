@@ -1,3 +1,8 @@
+# This code calculates developmental event-specific co-occurrence connectivity (COC).
+# Age-ordered neonatal scans are sampled by PMA to construct developmental sequences.
+# The analysis includes FC, Infomap communities, evolution events and Monte Carlo COC.
+# Set the data paths and numerical analysis parameters below before running.
+
 import os
 import gc
 import random
@@ -10,11 +15,25 @@ from scipy.io import savemat
 import infomap
 from tqdm import tqdm
 
-# Analysis parameter
-NUM_NODES = 8589
+# %% Analysis parameters and file paths
+BOLD_DATA_DIR = r""        # Folder containing sub_BOLD_<subject_id>.mat
+PMA_MAT_FILE = r""        # MAT file containing the PMA values
+PMA_VARIABLE = ""         # PMA variable name in the MAT file
+OUTPUT_DIR = r""           # Folder for developmental COC output
+
+NUM_NODES = None           # Number of cortical vertices
+CORR_THRESHOLD = None      # Fisher-z threshold for Infomap
+SIMILARITY_THRESHOLD = None   # Jaccard similarity threshold
+EXPANSION_THRESHOLD = None   # Community-size ratio for expansion
+CONTRACTION_THRESHOLD = None # Community-size ratio for contraction
+NUM_ITERATIONS = None      # Monte Carlo sampling repetitions
+CONFIG_NAME = ""          # Label for this parameter configuration
+MAX_WORKERS = None         # Parallel processes
+
 EVENT_TYPES = ['emergence', 'disappearance', 'expansion', 'contraction']
 
-# 1. FC calculation and Fisher-Z transformation
+
+# %% Calculation of Pearson FC and Fisher-z transformation
 def calculate_pearson_fc(bold_signal):
     X_mean = bold_signal.mean(axis=1, keepdims=True)
     X_centered = bold_signal - X_mean
@@ -30,8 +49,8 @@ def fisher_z_transform(window_r):
     return fisher_z_matrix
 
 
-# 2. Community Detection
-def detect_communities_in_window(fisher_z_matrix, threshold=[]):
+# %% Detection of Infomap communities
+def detect_communities_in_window(fisher_z_matrix, threshold):
     n_nodes = fisher_z_matrix.shape[0]
     work_matrix = fisher_z_matrix.copy()
     np.fill_diagonal(work_matrix, 0)
@@ -39,6 +58,7 @@ def detect_communities_in_window(fisher_z_matrix, threshold=[]):
     rows, cols = np.triu_indices_from(work_matrix, k=1)
     weights = work_matrix[rows, cols]
 
+    # Retain positive FC values above the selected threshold.
     valid_mask = (weights > threshold) & (~np.isnan(weights))
     valid_rows = rows[valid_mask]
     valid_cols = cols[valid_mask]
@@ -64,7 +84,6 @@ def process_subject_task(args):
     file_path = os.path.join(bold_dir, f"sub_BOLD_{subject_id}.mat")
 
     try:
-
         mat_data = sio.loadmat(file_path)
         var_names = [k for k in mat_data.keys() if not k.startswith('__')]
         if not var_names:
@@ -77,19 +96,16 @@ def process_subject_task(args):
 
         communities = detect_communities_in_window(fisher_z_matrix, threshold)
 
-
         del window_r, fisher_z_matrix, bold_signal
 
         return subject_id, communities
 
-    except Exception as e:
-        print()
+    except Exception:
         return subject_id, None
 
 
-# 3. Community Evolution Events Detection
+# %% Identification of community evolution events
 def calculate_similarity(nodes_set1, nodes_set2):
-    """Calculating Jaccard Similarity"""
     if len(nodes_set1) == 0 and len(nodes_set2) == 0:
         return 1.0
     intersection = len(nodes_set1.intersection(nodes_set2))
@@ -105,8 +121,7 @@ def group_nodes_by_community(communities):
 
 
 def detect_evolution_events(prev_communities, curr_communities, window_idx,
-                            sim_threshold=[], expansion_th=[], contraction_th=[]):
-
+                            sim_threshold, expansion_th, contraction_th):
     events = []
     if not prev_communities or not curr_communities:
         return events
@@ -114,7 +129,7 @@ def detect_evolution_events(prev_communities, curr_communities, window_idx,
     prev_groups = group_nodes_by_community(prev_communities)
     curr_groups = group_nodes_by_community(curr_communities)
 
-    # 1. Emergence
+    # Emergence: no prior community reaches the Jaccard threshold.
     for curr_id, curr_nodes in curr_groups.items():
         curr_nodes_set = set(curr_nodes)
         best_similarity = 0
@@ -133,7 +148,7 @@ def detect_evolution_events(prev_communities, curr_communities, window_idx,
                 'Node_Count': len(curr_nodes)
             })
 
-    # 2. Disappearance
+    # Disappearance: no current community sufficiently matches the prior one.
     for prev_id, prev_nodes in prev_groups.items():
         prev_nodes_set = set(prev_nodes)
         best_similarity = 0
@@ -160,7 +175,7 @@ def detect_evolution_events(prev_communities, curr_communities, window_idx,
             prev_size = len(prev_nodes)
             curr_size = len(best_match_nodes)
             ratio = curr_size / prev_size if prev_size > 0 else 1
-            # 3. Expansion
+
             if ratio > expansion_th:
                 events.append({
                     'Window_Number': window_idx + 1,
@@ -172,7 +187,7 @@ def detect_evolution_events(prev_communities, curr_communities, window_idx,
                     'Expansion_Ratio': f"{ratio:.2%}",
                     'Similarity': best_similarity
                 })
-            # 4. Contraction
+
             elif ratio < contraction_th:
                 events.append({
                     'Window_Number': window_idx + 1,
@@ -189,7 +204,6 @@ def detect_evolution_events(prev_communities, curr_communities, window_idx,
 
 
 def track_evolution_timeline(timeline_iter, sim_threshold, expansion_th, contraction_th):
-
     all_evolution_events = []
     community_details = []
     comm_dict = {}
@@ -203,7 +217,6 @@ def track_evolution_timeline(timeline_iter, sim_threshold, expansion_th, contrac
 
         if communities is None:
             continue
-
 
         community_groups = defaultdict(list)
         for node, comm_id in communities.items():
@@ -231,9 +244,10 @@ def track_evolution_timeline(timeline_iter, sim_threshold, expansion_th, contrac
     return all_evolution_events, community_details, comm_dict
 
 
-# 4. Event-specific COC Calculation
+# %% Calculation of event-specific COC matrices
 def calculate_cooccurrence_matrices_in_memory(all_evolution_events, comm_dict, n_windows):
 
+    # The existing denominator counts adjacent snapshot transitions.
     num_transitions = max(1, n_windows - 1)
 
     matrices = {
@@ -253,6 +267,7 @@ def calculate_cooccurrence_matrices_in_memory(all_evolution_events, comm_dict, n
         prev_id = int(prev_id) if prev_id is not None and pd.notna(prev_id) else -1
         curr_id = int(curr_id) if curr_id is not None and pd.notna(curr_id) else -1
 
+        # Identity events contribute all within-community vertex pairs.
         if ev_type == 'emergence' and curr_id != -1:
             nodes = comm_dict.get((curr_id, win_num), np.array([], dtype=np.int32))
             if len(nodes) >= 2:
@@ -265,6 +280,7 @@ def calculate_cooccurrence_matrices_in_memory(all_evolution_events, comm_dict, n
                 nodes = nodes[(nodes >= 0) & (nodes < NUM_NODES)]
                 matrices['disappearance'][np.ix_(nodes, nodes)] += 1.0
 
+        # Membership events connect added/removed vertices to retained vertices.
         elif ev_type in ['expansion', 'contraction'] and prev_id != -1 and curr_id != -1:
             prev_nodes = comm_dict.get((prev_id, win_num - 1), np.array([], dtype=np.int32))
             curr_nodes = comm_dict.get((curr_id, win_num), np.array([], dtype=np.int32))
@@ -297,20 +313,19 @@ def calculate_cooccurrence_matrices_in_memory(all_evolution_events, comm_dict, n
     return matrices
 
 
-# 5. Monte Carlo Analysis
+# %% Construction of developmental sequences and Monte Carlo averaging
 def run_pipeline(subject_pma_list, bold_dir, base_output_dir):
-    threshold = []
+    threshold = CORR_THRESHOLD
 
     task_args = [(subject_id, bold_dir, threshold) for subject_id, _ in subject_pma_list]
 
     precomputed_results = {}
-    with multiprocessing.Pool(processes=20) as pool:
+    with multiprocessing.Pool(processes=MAX_WORKERS) as pool:
         for subj_id, res_comm in tqdm(pool.imap_unordered(process_subject_task, task_args),
                                       total=len(task_args), desc="the progress of subject's community calculation"):
             precomputed_results[subj_id] = res_comm
 
-
-    # group by PMA, and select one subject from each unique PMA group each time
+    # Construct PMA strata, then draw one subject per age value in each run.
     pma_groups = defaultdict(list)
     for subj, pma in subject_pma_list:
         pma_groups[pma].append(subj)
@@ -318,22 +333,22 @@ def run_pipeline(subject_pma_list, bold_dir, base_output_dir):
     sorted_unique_pmas = sorted(pma_groups.keys())
     n_windows = len(sorted_unique_pmas)
 
-    num_iterations = []
+    num_iterations = NUM_ITERATIONS
 
-    timelines_50_runs = []
-    for run_idx in range(1, num_iterations + 1):
+    sampled_timelines = []
+    for _ in range(1, num_iterations + 1):
         current_timeline = []
         for window_idx, pma in enumerate(sorted_unique_pmas):
             subjs_in_this_age = pma_groups[pma]
             chosen_subj = random.choice(subjs_in_this_age)
             res_comm = precomputed_results[chosen_subj]
             current_timeline.append((window_idx, chosen_subj, pma, res_comm))
-        timelines_50_runs.append(current_timeline)
+        sampled_timelines.append(current_timeline)
 
     configs = [
-        {'name': 'sim0.4_sz1.02_0.98', 'sim_th': [], 'expansion_th': [], 'contraction_th': []},
+        {'name': CONFIG_NAME, 'sim_th': SIMILARITY_THRESHOLD,
+         'expansion_th': EXPANSION_THRESHOLD, 'contraction_th': CONTRACTION_THRESHOLD},
     ]
-
 
     for config in configs:
         print(
@@ -344,17 +359,17 @@ def run_pipeline(subject_pma_list, bold_dir, base_output_dir):
         current_output_dir = f"{base_output_dir}_{config['name']}"
         os.makedirs(current_output_dir, exist_ok=True)
 
+        # Accumulate event-specific matrices over the Monte Carlo samples.
         accumulated_matrices = {
             et: np.zeros((NUM_NODES, NUM_NODES), dtype=np.float64)
             for et in EVENT_TYPES
         }
 
-        for i, current_timeline in enumerate(tqdm(timelines_50_runs, desc="Monte Carlo simulation progress")):
+        for i, current_timeline in enumerate(tqdm(sampled_timelines, desc="Monte Carlo simulation progress")):
             run_id = i + 1
             run_out_dir = os.path.join(current_output_dir, f"run_{run_id}")
             os.makedirs(run_out_dir, exist_ok=True)
 
-            # 1. track the evolution events and community details
             all_evolution_events, community_details, comm_dict = track_evolution_timeline(
                 current_timeline,
                 sim_threshold=config['sim_th'],
@@ -362,7 +377,6 @@ def run_pipeline(subject_pma_list, bold_dir, base_output_dir):
                 contraction_th=config['contraction_th']
             )
 
-            # 2. save the details of the current round of events and communities
             if all_evolution_events:
                 events_df = pd.DataFrame(all_evolution_events)
                 events_df.to_csv(
@@ -377,11 +391,9 @@ def run_pipeline(subject_pma_list, bold_dir, base_output_dir):
                     index=False, encoding='utf-8-sig'
                 )
 
-            # 3. Calculating COC and normalize it
             matrices = calculate_cooccurrence_matrices_in_memory(
                 all_evolution_events, comm_dict, n_windows=n_windows
             )
-
 
             for key in EVENT_TYPES:
                 accumulated_matrices[key] += matrices[key]
@@ -389,7 +401,8 @@ def run_pipeline(subject_pma_list, bold_dir, base_output_dir):
             del matrices, comm_dict, all_evolution_events, community_details
             gc.collect()
 
-        # average Monte Carlo results and save
+        # Save the average matrix for each of the four event categories.
+        for key in EVENT_TYPES:
             avg_matrix = (accumulated_matrices[key] / float(num_iterations)).astype(np.float32)
             matrix_file = os.path.join(current_output_dir, f"average_{key}_COC.mat")
             savemat(matrix_file, {'matrix': avg_matrix}, do_compression=True)
@@ -398,13 +411,11 @@ def run_pipeline(subject_pma_list, bold_dir, base_output_dir):
         del accumulated_matrices
         gc.collect()
 
+
+# %% Loading of age data and execution
 def main_population(bold_dir, pma_file, base_output_dir):
-
-    if not os.path.exists(pma_file):
-        return
-
     pma_data = sio.loadmat(pma_file)
-    pma_values = pma_data[''].flatten()
+    pma_values = pma_data[PMA_VARIABLE].flatten()
 
     subject_pma_list = [(i + 1, pma_values[i]) for i in range(len(pma_values))]
 
@@ -412,9 +423,4 @@ def main_population(bold_dir, pma_file, base_output_dir):
 
 
 if __name__ == "__main__":
-    bold_data_dir = r""
-    pma_mat_file = r""
-    base_output_dir = r""
-
-    if os.path.exists(bold_data_dir):
-        main_population(bold_data_dir, pma_mat_file, base_output_dir)
+    main_population(BOLD_DATA_DIR, PMA_MAT_FILE, OUTPUT_DIR)
