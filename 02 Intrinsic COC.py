@@ -18,7 +18,7 @@ from scipy.io import loadmat, savemat
 from tqdm import tqdm
 
 # %% Analysis parameters and file paths
-BOLD_DATA_DIR = r""
+BOLD_DATA_DIR = r""     # Folder containing sub_BOLD_<subject_id>.mat
 OUTPUT_DIR = r""
 POPULATION_AVG_DIR = os.path.join(OUTPUT_DIR, "Population_Average_Matrices")
 
