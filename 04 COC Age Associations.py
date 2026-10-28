@@ -18,10 +18,10 @@ PMA_PATH = r""
 NET_LABEL_PATH = r""
 
 EVENTS = ["emergence", "disappearance", "expansion", "contraction"]
-NUM_SUBJECTS = None      # Number of participants
-MATRIX_SIZE = None       # Number of cortical vertices
-DIVISOR = None           # Scaling divisor for input COC matrices
-NUM_WORKERS = None       # Parallel processes
+NUM_SUBJECTS = []      # Number of participants
+MATRIX_SIZE = []       # Number of cortical vertices
+DIVISOR = []           # Scaling divisor for input COC matrices
+NUM_WORKERS = []       # Parallel processes
 
 COMMUNITY_NAMES = ["VIS", "SM", "DA", "VA", "LIM", "FPN", "DMN"]
 NUM_NETWORKS = len(COMMUNITY_NAMES)
