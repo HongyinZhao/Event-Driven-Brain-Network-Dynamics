@@ -17,8 +17,8 @@ DEVELOPMENTAL_FILE_PREFIX = ""  # Prefix of the developmental COC filenames
 INTRINSIC_COC_DIR = ""      # Subject-level intrinsic COC matrices
 OUTPUT_DIR = ""             # Folder for CTA results
 EVENT_TYPES = ["emergence", "disappearance", "expansion", "contraction"]
-NUM_SUBJECTS = None      # Number of participants
-MAX_WORKERS = None       # Parallel processes
+NUM_SUBJECTS = []      # Number of participants
+MAX_WORKERS = []       # Parallel processes
 
 
 # %% Loading and preparation of developmental COC
