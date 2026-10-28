@@ -1,5 +1,9 @@
+# This code calculates associations between intrinsic COC and neonatal age.
+# Partial correlations test GA controlling for PNA and PNA controlling for GA.
+# Results are calculated at global, network and edge levels with FDR correction.
+# Set the data paths and numerical analysis parameters below before running.
+
 import os
-import time
 import numpy as np
 import scipy.io as sio
 from scipy.stats import pearsonr, t
@@ -8,24 +12,24 @@ import multiprocessing as mp
 import threading
 from tqdm import tqdm
 
-# configuration
+# %% Analysis parameters and file paths
 BASE_DIR = r""
 PMA_PATH = r""
 NET_LABEL_PATH = r""
 
 EVENTS = ["emergence", "disappearance", "expansion", "contraction"]
-NUM_SUBJECTS = []
-MATRIX_SIZE = []
-DIVISOR = 1
-NUM_WORKERS = []
+NUM_SUBJECTS = None      # Number of participants
+MATRIX_SIZE = None       # Number of cortical vertices
+DIVISOR = None           # Scaling divisor for input COC matrices
+NUM_WORKERS = None       # Parallel processes
 
 COMMUNITY_NAMES = ["VIS", "SM", "DA", "VA", "LIM", "FPN", "DMN"]
 NUM_NETWORKS = len(COMMUNITY_NAMES)
 
-OUTPUT_DIR = ""
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+OUTPUT_DIR = ""           # Folder for the results
 
 
+# %% Loading of MAT data and calculation of partial Pearson correlation
 def load_mat_variable(filepath):
     data = sio.loadmat(filepath)
     for key in data:
@@ -55,8 +59,6 @@ def calc_partial_r(x, y, z):
     p_val = t.sf(np.abs(t_val), df=df) * 2
     return pr, p_val
 
-
-# 全局变量占位符
 W_IU = None
 W_NET_NODES = None
 W_GA = None
@@ -64,6 +66,7 @@ W_PNA = None
 W_NUM_EDGES = None
 
 
+# %% Initialization of parallel workers
 def init_worker(matrix_size, net_nodes, ga_values, pna_values):
     global W_IU, W_NET_NODES, W_GA, W_PNA, W_NUM_EDGES
     W_IU = np.triu_indices(matrix_size, k=1)
@@ -73,10 +76,9 @@ def init_worker(matrix_size, net_nodes, ga_values, pna_values):
     W_PNA = pna_values
 
 
+# %% Calculation of subject-level global and network COC
 def process_chunk(args):
-
     event, subj_indices, base_dir, divisor, queue = args
-
 
     sum_X = np.zeros(W_NUM_EDGES, dtype=np.float64)
     sum_X2 = np.zeros(W_NUM_EDGES, dtype=np.float64)
@@ -94,6 +96,7 @@ def process_chunk(args):
             edge_vals = mat[W_IU]
             global_mean = float(np.mean(edge_vals))
 
+            # Exclude zero or near-zero COC matrices.
             if np.isclose(global_mean, 0.0) or global_mean == 0:
                 is_valid = False
                 net_mean = np.zeros((NUM_NETWORKS, NUM_NETWORKS), dtype=np.float32)
@@ -105,6 +108,7 @@ def process_chunk(args):
                 sum_X_GA += (edge_vals * W_GA[subj_idx])
                 sum_X_PNA += (edge_vals * W_PNA[subj_idx])
 
+                # Within-network pairs exclude the diagonal; between-network pairs use all edges.
                 net_mean = np.zeros((NUM_NETWORKS, NUM_NETWORKS), dtype=np.float32)
                 for i in range(1, NUM_NETWORKS + 1):
                     for j in range(i, NUM_NETWORKS + 1):
@@ -123,8 +127,8 @@ def process_chunk(args):
 
                 chunk_results.append((subj_idx, global_mean, net_mean, is_valid))
 
-        except Exception as e:
-            print(f"")
+        except Exception:
+            pass
 
         if queue is not None:
             queue.put(1)
@@ -132,6 +136,7 @@ def process_chunk(args):
     return sum_X, sum_X2, sum_X_GA, sum_X_PNA, chunk_results
 
 
+# %% Monitoring of subject processing
 def progress_listener(queue, total):
     pbar = tqdm(total=total, desc="processing", unit="subject")
     for _ in range(total):
@@ -140,8 +145,8 @@ def progress_listener(queue, total):
     pbar.close()
 
 
-# ================= 3. 主程序 =================
 if __name__ == '__main__':
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
     mp.set_start_method('spawn', force=True)
 
     age_data = sio.loadmat(PMA_PATH)
@@ -149,8 +154,8 @@ if __name__ == '__main__':
     pma_values = age_data['TermPMA'].flatten()
     pna_values = pma_values - ga_values
 
-    labels_8589 = load_mat_variable(NET_LABEL_PATH).flatten()
-    net_nodes = {i: np.where(labels_8589 == i)[0] for i in range(1, NUM_NETWORKS + 1)}
+    network_labels = load_mat_variable(NET_LABEL_PATH).flatten()
+    net_nodes = {i: np.where(network_labels == i)[0] for i in range(1, NUM_NETWORKS + 1)}
 
     tmp_iu = np.triu_indices(MATRIX_SIZE, k=1)
     NUM_EDGES = len(tmp_iu[0])
@@ -160,8 +165,6 @@ if __name__ == '__main__':
     chunks = [all_indices[i::NUM_WORKERS] for i in range(NUM_WORKERS)]
 
     for event in EVENTS:
-
-        start_time = time.time()
 
         manager = mp.Manager()
         progress_queue = manager.Queue()
@@ -180,7 +183,6 @@ if __name__ == '__main__':
         pool.close()
         pool.join()
         watcher.join()
-
 
         total_sum_X = np.zeros(NUM_EDGES, dtype=np.float64)
         total_sum_X2 = np.zeros(NUM_EDGES, dtype=np.float64)
@@ -205,17 +207,17 @@ if __name__ == '__main__':
         del results
 
         N_valid = int(np.sum(valid_mask))
-        num_excluded = NUM_SUBJECTS - N_valid
 
         if N_valid < 4:
             continue
 
+        # Reuse the same valid-subject mask at every analysis level.
         valid_ga = ga_values[valid_mask]
         valid_pna = pna_values[valid_mask]
         valid_global_means = global_means[valid_mask]
         valid_net_means = net_means[valid_mask]
 
-        # ================= A: Global Level =================
+        # Global COC: GA controlling for PNA, and PNA controlling for GA.
         pr_GA_glob, p_GA_glob = calc_partial_r(valid_global_means, valid_ga, valid_pna)
         pr_PNA_glob, p_PNA_glob = calc_partial_r(valid_global_means, valid_pna, valid_ga)
 
@@ -227,13 +229,13 @@ if __name__ == '__main__':
             'N_valid': N_valid
         })
 
-        # ================= B: Network Level=================
         PR_GA_net = np.zeros((NUM_NETWORKS, NUM_NETWORKS))
         P_uncorr_GA_net = np.zeros((NUM_NETWORKS, NUM_NETWORKS))
         p_vals_GA_net = []
 
         PR_PNA_net = np.zeros((NUM_NETWORKS, NUM_NETWORKS))
         P_uncorr_PNA_net = np.zeros((NUM_NETWORKS, NUM_NETWORKS))
+        # Use unique network pairs (including within-network comparisons).
         p_vals_PNA_net = []
 
         for i in range(NUM_NETWORKS):
@@ -262,10 +264,8 @@ if __name__ == '__main__':
                 P_fdr_PNA_net[i, j] = p_vals_fdr_PNA[idx]
                 idx += 1
 
-
         def symmetrize(matrix):
             return matrix + matrix.T - np.diag(matrix.diagonal())
-
 
         sio.savemat(os.path.join(OUTPUT_DIR, f"{event}_Network_Results.mat"), {
             'PR_GA_net': symmetrize(PR_GA_net), 'P_uncorr_GA_net': symmetrize(P_uncorr_GA_net),
@@ -275,26 +275,22 @@ if __name__ == '__main__':
             'Community_Names': COMMUNITY_NAMES, 'N_valid': N_valid
         })
 
-        # ================= C: Edge Level =================
-
         N_float = float(N_valid)
 
         sum_GA, sum_PNA = np.sum(valid_ga), np.sum(valid_pna)
         SS_GA = np.sum((valid_ga - np.mean(valid_ga)) ** 2)
         SS_PNA = np.sum((valid_pna - np.mean(valid_pna)) ** 2)
 
-        #  correlation between GA and PNA
         r_GA_PNA, _ = pearsonr(valid_ga, valid_pna)
         denom_GA_PNA = np.sqrt(1 - r_GA_PNA ** 2)
 
-        # SS and SP of edge
+        # Calculate edge-wise Pearson correlations from accumulated statistics.
         SS_X = total_sum_X2 - (total_sum_X ** 2) / N_float
         SP_X_GA = total_sum_X_GA - (total_sum_X * sum_GA) / N_float
         SP_X_PNA = total_sum_X_PNA - (total_sum_X * sum_PNA) / N_float
 
         edge_valid_mask = (SS_X > 1e-12)
 
-        # 1.  calculating Pearson r between every edge and GA,PNA
         R_X_GA = np.zeros(NUM_EDGES, dtype=np.float32)
         R_X_PNA = np.zeros(NUM_EDGES, dtype=np.float32)
 
@@ -304,7 +300,6 @@ if __name__ == '__main__':
         R_X_GA = np.clip(R_X_GA, -1.0, 1.0)
         R_X_PNA = np.clip(R_X_PNA, -1.0, 1.0)
 
-        # 2. Derivtion of the partial correlation coefficient
         PR_GA = np.zeros(NUM_EDGES, dtype=np.float32)
         PR_PNA = np.zeros(NUM_EDGES, dtype=np.float32)
 
@@ -319,7 +314,6 @@ if __name__ == '__main__':
         PR_GA = np.clip(PR_GA, -1.0, 1.0)
         PR_PNA = np.clip(PR_PNA, -1.0, 1.0)
 
-        # 3. calculating the value of P  (df = N - 3)
         df_edge = N_float - 3
         P_uncorr_GA = np.ones(NUM_EDGES, dtype=np.float32)
         P_uncorr_PNA = np.ones(NUM_EDGES, dtype=np.float32)
@@ -332,6 +326,7 @@ if __name__ == '__main__':
         T_stat_PNA = PR_PNA[valid_t_PNA_mask] * np.sqrt(df_edge / (1.0 - PR_PNA[valid_t_PNA_mask] ** 2))
         P_uncorr_PNA[valid_t_PNA_mask] = t.sf(np.abs(T_stat_PNA), df=df_edge) * 2
 
+        # Apply FDR correction to the edge-wise p-values.
         _, P_fdr_GA = fdrcorrection(P_uncorr_GA, method='indep')
         _, P_fdr_PNA = fdrcorrection(P_uncorr_PNA, method='indep')
 
@@ -342,7 +337,6 @@ if __name__ == '__main__':
             mat = mat + mat.T
             np.fill_diagonal(mat, diag_val)
             return mat
-
 
         sio.savemat(os.path.join(OUTPUT_DIR, f"{event}_Edge_Results.mat"), {
             'PR_GA_matrix': reconstruct_matrix(PR_GA, diag_val=0),
@@ -356,4 +350,4 @@ if __name__ == '__main__':
             'N_valid': N_valid
         })
 
-print(f"successful")
+    print("COC age-association analysis complete.")
